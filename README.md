@@ -42,7 +42,7 @@ Real prompts only, no counting prompts in the headline (40 prompts, 8 categories
 |---|---|---|---|---|---|---|
 | SGLang TP2 (this repo) | pending | pending | pending | pending | pending | 327K ctx |
 | vLLM DSpark TP2 (ours) | pending | pending | pending | pending | pending | 1M ctx |
-| vLLM DSpark TP4 (ours, 2026-09-02) | 42 | 98 | | 124 | 0.90 s | 1M ctx, 8.33M-token KV |
+| vLLM DSpark TP4 (ours, 2026-09-02) | 42 | 98 | 94.2 | 124 | 0.21 s | 1M ctx, 8.33M-token KV; fresh 1.6K-token prompt TTFT 0.94 s |
 
 ## Lane 2: TP4 (4 Sparks)
 

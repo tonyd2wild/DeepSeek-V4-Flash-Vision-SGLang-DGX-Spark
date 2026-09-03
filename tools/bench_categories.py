@@ -80,9 +80,9 @@ P += [("story1", "narrative", "Write a 150 to 250 word short story in first pers
       ("story5", "narrative", "Write a 150 to 250 word story for children aged 6 to 8 about a robot learning to wait. Exactly three paragraphs.", {"words": (150, 250), "paragraphs": 3})]
 P += [("sum1", "summary", "Summarize the following notes in exactly 3 bullet points, each one sentence.\n\n---\n" + doc("bench-docs/NOTES.md"), {"bullets": 3}),
       ("sum2", "summary", "Summarize the following report in one paragraph of at most 80 words.\n\n---\n" + doc("bench-docs/REPORT.md"), {"words": (20, 80), "paragraphs": 1}),
-      ("sum3", "summary", "In exactly two sentences, summarize what the following text says about quality.\n\n---\n" + doc("results/x_article_paste.txt", 7000), {"sentences": 2}),
+      ("sum3", "summary", "In exactly two sentences, summarize what the following text says about quality.\n\n---\n" + doc("bench-docs/x_article_paste.txt", 7000), {"sentences": 2}),
       ("sum4", "summary", "Summarize the following README in 3 bullets labeled What, How, Credits.\n\n---\n" + doc("bench-docs/README.md"), {"bullets": 3, "must": ["What", "How", "Credits"]}),
-      ("sum5", "summary", "Turn the following into a single tweet of at most 280 characters. Output only the tweet.\n\n---\n" + doc("results/tweet.md", 3000), {"chars": 280})]
+      ("sum5", "summary", "Turn the following into a single tweet of at most 280 characters. Output only the tweet.\n\n---\n" + doc("bench-docs/tweet.md", 3000), {"chars": 280})]
 P += [("fmt1", "format", "List exactly 7 prime numbers greater than 50, one per line, ascending. Output nothing else.", {"primes": 7}),
       ("fmt2", "format", "Output a markdown table with the columns Lane | Context | KV pool and two rows: NVFP4 with 262,144 and 295,230; EXL3 with 1,048,576 and 1,396,551. Output nothing else.", {"table_rows": 2, "text": ["262,144", "295,230", "1,048,576", "1,396,551"]}),
       ("fmt3", "format", "Reply with the sentence 'The quick brown fox jumps over the lazy dog' with the words in reverse order, all lowercase, no punctuation. Output only the result.", {"exact": "dog lazy the over jumps fox brown quick the"}),
@@ -185,7 +185,7 @@ def grade(cat, spec, out):
 # ------------------------------------------------------------------ streaming call
 def call(prompt):
     body = json.dumps({"model": a.model, "messages": [{"role": "user", "content": prompt}], "temperature": 0, "max_tokens": MAXTOK,
-                       "stream": True, "stream_options": {"include_usage": True}, "chat_template_kwargs": {"enable_thinking": a.thinking == "on"}}).encode()
+                       "stream": True, "stream_options": {"include_usage": True}, "chat_template_kwargs": {"enable_thinking": a.thinking == "on", "thinking": a.thinking == "on"}}).encode()
     req = urllib.request.Request(URL, data=body, headers={"Content-Type": "application/json"})
     t0 = time.time(); t_first = None; txt = []; rc = 0; usage = {}; fin = None
     with urllib.request.urlopen(req, timeout=900) as r:
@@ -210,7 +210,13 @@ def call(prompt):
             "decode_tok_s": round(dec, 1) if dec else None, "reasoning_chars": rc, "finish": fin, "output": out}
 
 def run_one(item):
-    pid, cat, prompt, spec = item; r = call(prompt); score, fails = grade(cat, spec, r["output"])
+    pid, cat, prompt, spec = item
+    try:
+        r = call(prompt)
+    except Exception as exc:  # an HTTP 4xx/5xx or a dropped stream must not abort the other 39 prompts
+        r = {"ttft_s": None, "wall_s": None, "completion_tokens": 0, "prompt_tokens": 0, "decode_tok_s": None,
+             "reasoning_chars": 0, "finish": "error: %s" % str(exc)[:120], "output": ""}
+    score, fails = grade(cat, spec, r["output"])
     r.update({"id": pid, "category": cat, "prompt": prompt, "score": score, "fails": fails})
     print(f"  [{a.lane}/{a.thinking}/c{a.concurrency}] {pid:8} {cat:10} score={('%.2f' % score) if score is not None else ' n/a'}  ttft {r['ttft_s']:5.2f}s  decode {r['decode_tok_s'] or 0:5.1f} tok/s  {r['completion_tokens']:4} tok  {r['finish']}" + (f"  fails: {'; '.join(fails)[:70]}" if fails else ""), flush=True)
     return r

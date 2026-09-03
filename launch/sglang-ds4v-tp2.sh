@@ -38,7 +38,11 @@ mkdir -p "$CACHE_HOST"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 sync; echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null || true
 
-EXTRA=()
+# Thinking off by default so decode numbers are answer tokens (SGLang reads the "thinking" template kwarg for
+# DeepSeek V4; the vLLM lane used the same default). Reasoning parser keeps any thinking out of `content`.
+# Served id matches the HF repo so clients can use it as the model name.
+EXTRA=(--default-chat-template-kwargs '{"thinking":false}' --reasoning-parser deepseek-v4
+       --served-model-name "${SERVED_NAME:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}")
 if [ -n "${LOADER_THREADS:-}" ]; then
   EXTRA+=(--model-loader-extra-config "{\"enable_multithread_load\":true,\"num_threads\":$LOADER_THREADS}")
 fi
