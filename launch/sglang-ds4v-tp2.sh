@@ -16,11 +16,10 @@ NAME="${NAME:-sglang_ds4v}"
 HEAD_IP="${HEAD_IP:-192.168.192.1}"; DIST_PORT="${DIST_PORT:-5000}"; PORT="${PORT:-30000}"
 CTX="${CTX:-327680}"; MAX_REQ="${MAX_REQ:-32}"; CG_BS="${CG_BS:-32}"
 CACHE_HOST="${CACHE_HOST:-/var/tmp/sglang-cache}"
-# The cookbook cell says --mem-fraction-static 0.80. On our GB10s the rank-0 scheduler was OOM-killed during
-# weight load at 0.80 (loader peaked at 38 GB of host RAM while converting FP8 shared experts to FP4) and again at
-# 0.72 without swap. What loads: 0.72 + a swapfile on each node (see README). Override MEM_FRAC=0.80 to reproduce
-# the cell once swap is in place.
-MEM_FRAC="${MEM_FRAC:-0.72}"
+# --mem-fraction-static 0.80 is the cookbook value and the floor that works: the loaded TP2 weight shard is ~73%
+# of a GB10's 128 GB (SGLang reports "minimum viable 0.731"), so 0.80 leaves ~9 GB of KV per node. Going lower
+# does not help; the load-time OOM on GB10 is the loader's host-RAM spike, which a swapfile absorbs (see README).
+MEM_FRAC="${MEM_FRAC:-0.80}"
 case "$RANK" in
   0) MODEL_HOST="${MODEL_HOST:-/var/tmp/models/$MODEL_DIR}" ;;
   1) # worker: local copy if it has one, else the head's NFS export
