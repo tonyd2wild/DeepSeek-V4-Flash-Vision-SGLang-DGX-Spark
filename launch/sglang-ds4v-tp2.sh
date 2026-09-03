@@ -10,10 +10,18 @@ IMAGE="${IMAGE:-lmsysorg/sglang:dev-v4f-2dgx-v2}"
 MODEL_DIR="${MODEL_DIR:-DeepSeek-V4-Flash-Vision-Exp}"
 NAME="${NAME:-sglang_ds4v}"
 HEAD_IP="192.168.192.1"; DIST_PORT="${DIST_PORT:-5000}"; PORT="${PORT:-30000}"
-CTX="${CTX:-327680}"; MEM_FRAC="${MEM_FRAC:-0.80}"; MAX_REQ="${MAX_REQ:-32}"; CG_BS="${CG_BS:-32}"
+CTX="${CTX:-327680}"; MAX_REQ="${MAX_REQ:-32}"; CG_BS="${CG_BS:-32}"
+# The cookbook cell says --mem-fraction-static 0.80. On our GB10s that OOM-killed the rank-0 scheduler during
+# weight load (loader peaked at 38 GB of host RAM while converting FP8 shared experts to FP4). 0.72 plus a
+# page-cache flusher during load (see README) loads cleanly. Override with MEM_FRAC=0.80 to reproduce the cell.
+MEM_FRAC="${MEM_FRAC:-0.72}"
 case "$RANK" in
   0) MODEL_HOST="${MODEL_HOST:-/var/tmp/models/$MODEL_DIR}" ;;
-  1) MODEL_HOST="${MODEL_HOST:-/mnt/bluey-models/$MODEL_DIR}" ;;
+  1) # worker: local copy if it has one, else the head's NFS export
+     if [ -z "${MODEL_HOST:-}" ]; then
+       if [ -f "/var/tmp/models/$MODEL_DIR/config.json" ]; then MODEL_HOST="/var/tmp/models/$MODEL_DIR"
+       else MODEL_HOST="/mnt/bluey-models/$MODEL_DIR"; fi
+     fi ;;
   *) echo "rank must be 0 or 1"; exit 2 ;;
 esac
 [ -f "$MODEL_HOST/config.json" ] || { echo "model not found at $MODEL_HOST"; exit 3; }
