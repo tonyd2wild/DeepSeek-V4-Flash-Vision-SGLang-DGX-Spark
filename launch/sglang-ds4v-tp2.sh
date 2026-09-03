@@ -15,6 +15,10 @@ CTX="${CTX:-327680}"; MAX_REQ="${MAX_REQ:-32}"; CG_BS="${CG_BS:-32}"
 # weight load (loader peaked at 38 GB of host RAM while converting FP8 shared experts to FP4). 0.72 plus a
 # page-cache flusher during load (see README) loads cleanly. Override with MEM_FRAC=0.80 to reproduce the cell.
 MEM_FRAC="${MEM_FRAC:-0.72}"
+# Loader staging is the other half of the load-time spike: the default multi-thread shard loader holds several
+# 3.5 GB shards in host RAM at once. Two threads plus a swapfile (48 GB, see README) rides through it.
+LOADER_THREADS="${LOADER_THREADS:-2}"
+SGLANG_EXTRA="${SGLANG_EXTRA:-} --model-loader-extra-config {\"enable_multithread_load\":true,\"num_threads\":$LOADER_THREADS}"
 case "$RANK" in
   0) MODEL_HOST="${MODEL_HOST:-/var/tmp/models/$MODEL_DIR}" ;;
   1) # worker: local copy if it has one, else the head's NFS export
