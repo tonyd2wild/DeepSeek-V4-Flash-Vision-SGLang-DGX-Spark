@@ -1,0 +1,454 @@
+# NVFP4 vs EXL3 for GLM-5.3-Flash on DGX Spark
+
+*2Wild fleet report · 2026-09-01 · tonyd2wild (deploy + bench with Kai) · published page: docs/article.html*
+
+## TL;DR
+The same 320B MoE, GLM-5.3-Flash, in two 4-bit quantizations, on two independent 2-node DGX Spark pairs, benched
+**at the same time in the same state** (all four nodes restarted together, clocks verified at ~2,170–2,190 MHz under
+decode load), isolated from every other consumer. Single-stream decode: NVFP4 64.3 tok/s vs EXL3 61.8 tok/s (NVFP4 +4%). Peak aggregate: NVFP4 138.6 tok/s vs EXL3 149.7 tok/s (EXL3 +8%) (peaks at c3 / c4).
+Per-stream at c6: NVFP4 35.0 tok/s vs EXL3 35.8 tok/s (EXL3 +2%). Warm prefill: NVFP4 1225 tok/s vs EXL3 684 tok/s (NVFP4 +79%); TTFT NVFP4 1.29 s vs EXL3 2.31 s (NVFP4 lower by 44%). Wall-to-wall at c6: NVFP4 10.09 s vs EXL3 8.95 s (EXL3 lower by 11%). EXL3 serves 4× the
+context with 4.7× the KV pool; boot to serve EXL3 13 min (local weights both nodes, warm trellis JIT cache) vs NVFP4 23 min (worker loads over NFS from head (Reddie page cache warm), TileLang cache partly warm); quality
+probe tie. An earlier run showing EXL3 ahead on every line was discarded: NVFP4's nodes were
+clock-capped after a reboot (611–728 MHz); with clocks equal the picture is the one above.
+
+## Headline, real prompts (how we now quote decode: prose and code, not the counting prompt)
+| | NVFP4 (Reddie + Spark4) | EXL3 (Bluey + Asusi) |
+|---|---|---|
+| prose decode, c1, tok/s (median of 3 runs; range) | 18.8 (18.8–19.8) | 19.1 (18.3–19.5) |
+| code decode, c1, tok/s (median of 3 runs; range) | 52.2 (48.3–57.7) | 48.6 (41.9–50.2) |
+| mixed real-prompt load c4: aggregate tok/s / TTFT | 31.4 / 1.97 s | 43.4 / 0.66 s |
+| time to first token, fresh 1.6K prompts, c1 / c6 | 1.29 s / 4.53 s | 2.31 s / 9.82 s |
+| cold prefill, fresh 211,001-token prompt, tok/s | 2,763 | 1,752 |
+
+Counting-prompt numbers below are the speculative-decode ceiling (the drafter's easiest sequence), kept for comparability with the recipes' own peak tests. Prefill is quoted cold only; cache replay has its own labeled row.
+
+## Counting prompt (speculative-decode ceiling), isolated, both lanes benched simultaneously, 2026-09-01 17:34:23
+| | NVFP4 (Reddie + Spark4) | EXL3 (Bluey + Asusi) | EXL3 ÷ NVFP4 |
+|---|---|---|---|
+| c1 single-stream tok/s | 64.3 | 61.8 | 1.0× |
+| peak aggregate tok/s (at c) | 138.6 (c3) | 149.7 (c4) | 1.1× |
+| c6 aggregate tok/s | 136.3 | 125.2 | 0.9× |
+| c6 per-stream tok/s | 35.0 | 35.8 | 1.0× |
+| prefill tok/s (~1.5K prompt) (fresh prompts, different text per request, ~1,582 tokens, median of 3 rounds) | 1225 | 684 | 0.6× |
+| TTFT, fresh 1.6K prompts, c1 / c6 | 1.29 s / 4.53 s | 2.31 s / 9.82 s | 0.6× / 0.5× lower |
+| identical prompt repeated (prefix cache), TTFT c1 / c6 | 1.54 s / 4.6 s | 0.52 s / 1.02 s | cache, not prefill |
+| cold prefill on a fresh 211,001-token prompt, tok/s | 2,763 | 1,752 | |
+| 211,001-token context replayed (prefix cache) | 9.2 s | 0.8 s | |
+| mixed load c4 (four real prompts in flight): aggregate tok/s / TTFT | 31.4 / 1.97 s | 43.4 / 0.66 s | |
+| wall-to-wall c1 / c6 (300-tok answer) | 4.98 s / 10.09 s | 5.18 s / 8.95 s | 1.0× / 1.1× lower |
+| c1 spread (detailed, n=5) | 62.8–64.7 (±1.5%) | 59.8–61.9 (±1.7%) | |
+| max context | 262,144 | 1,048,576 | 4× |
+| KV pool (tokens) | 295,230 | 1,396,551 | 4.7× |
+| quality probe | correct | correct | tie |
+| boot: launch → /health 200 | 23 min (worker loads over NFS from head (Reddie page cache warm), TileLang cache partly warm) | 13 min (local weights both nodes, warm trellis JIT cache) | |
+
+## Peak ceiling: counting prompt c1–c6 (3 rounds per level; max draft acceptance, not a decode number)
+| c | NVFP4 agg | per-stream | wall-to-wall | TTFT (fresh) | EXL3 agg | per-stream | wall-to-wall | TTFT (fresh) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 64.3 | 64.3 | 4.98 s | 1.29 s | 61.8 | 61.8 | 5.18 s | 2.31 s |
+| 2 | 111.1 | 55.5 | 5.76 s | 2.14 s | 92.5 | 46.5 | 6.88 s | 4.13 s |
+| 3 | 138.6 | 47.0 | 6.81 s | 3.01 s | 120.2 | 41.2 | 7.76 s | 5.85 s |
+| 4 | 111.2 | 48.5 | 6.61 s | 3.0 s | 149.7 | 37.4 | 8.55 s | 7.47 s |
+| 5 | 131.3 | 47.0 | 6.81 s | 2.98 s | 116.9 | 36.2 | 8.85 s | 8.96 s |
+| 6 | 136.3 | 35.0 | 10.09 s | 4.53 s | 125.2 | 35.8 | 8.95 s | 9.82 s |
+
+## Hardware and topology
+Four NVIDIA DGX Spark (GB10, sm_121a, 128 GB unified memory, ~121 GB usable) on a ConnectX-7 RoCE v2 fabric,
+192.168.192.0/24, rail 0 (`enp1s0f0np0` / `rocep1s0f0`, GID 3). Reddie (.2) heads NVFP4 with Spark4 (.4);
+Bluey (.1) heads EXL3 with Asusi (.3). Both lanes TP=2 across two nodes (vLLM mp executor, NCCL over RoCE);
+they share nothing but the switch. Bench client: a Mac mini on the same tailnet.
+
+**Clock state matters on GB10.** An earlier run was thrown out: after a reboot, Reddie and Spark4 came up pinned at
+611–728 MHz SM clock under load (EXL3's nodes ran ~2,500) and NVFP4 measured 36 tok/s with a perfect 92–100 % draft
+acceptance. All four were restarted together and verified under real decode load before this run: healthy GB10s here
+settle at ~2,170–2,180 MHz at ~96 % utilization. Check `nvidia-smi --query-gpu=clocks.sm` under load after any
+Spark reboot before trusting a throughput number.
+
+## The two lanes
+**NVFP4 (reference).** The published 2-Spark recipe run verbatim: weights `RedHatAI/GLM-5.3-Flash-NVFP4`; image
+`ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2`; `--max-model-len 262144 --gpu-memory-utilization 0.85
+--kv-cache-memory 3 GiB --max-num-seqs 6 --max-num-batched-tokens 8192 --block-size 2304 --moe-backend marlin
+--kv-cache-dtype fp8_e4m3 --enforce-eager`; DFlash2 drafter k=7 (92–100 % draft acceptance on structured output);
+`vm.swappiness=0`; worker first, head 25 s later.
+
+**EXL3 (challenger).** Reederey87's GB10 kit (MiaAI-Lab's sibling as cross-reference) built for our fabric: weights
+`brandonmusic/GLM-5.3-Flash-tr3-4bpw` (EXL3/TR3, 4 bpw, 120 shards, ~164 GiB, ~91 GiB resident per node);
+exllamav3 compiled for `12.1a`; `--quantization exl3 --max-model-len 1000000 --gpu-memory-utilization 0.85
+--kv-cache-memory-bytes 15414698763 --max-num-seqs 4 --max-num-batched-tokens 3584 --kv-cache-dtype fp8
+--no-async-scheduling`; same DFlash2 drafter k=7. Both lanes: fp8 KV, thinking off, multimodal chat template,
+native `image_url` (a red square came back "Red" on both).
+
+## Method
+**Isolation.** Relay parked on the 3090 27B, latency dashboard paused (it sends real probe completions), the three
+Hermes supervisors that default to `glm-5.3-flash` moved to the 27B; after each run the head's access log shows chat
+POSTs from the bench client only, with counts matching the requests issued (the supervisors share the client's IP,
+so only counts prove it). This run: NVFP4 head 128 chat POSTs, all from the bench client; EXL3 head 129 from the bench client, and the only other traffic in the 30-minute log window was the kit's own post-serve warm-up burst of 15 requests at 17:16 ET, fifteen minutes before the tests began. **Simultaneity.** Both lanes benched in parallel; no shared GPUs, memory or NCCL group.
+**Warm-up.** 2× c1 + 1× c6 before measuring; both engines JIT-compile per request shape — never bench a cold lane.
+**Metrics.** Median tokens/s, non-streaming. c1–c6: 3 rounds of c concurrent ~300-token generations; aggregate =
+Σ tokens / round wall; per-stream = each request's tokens / its wall; wall-to-wall = end-to-end latency (median).
+TTFT at level c: c concurrent ~1.5K-token prompts with an 8-token answer. Detailed run: c1 ×5 for the spread.
+Temperature 0, `stream false`, thinking off, identical prompts. Tools in `tools/`.
+
+## Reading the curve
+EXL3 scales to 149.7 tok/s at c4 and flattens — the kit's `--max-num-seqs 4` (a config cap, not the quant).
+NVFP4 (`--max-num-seqs 6`) admits all six but pays per stream: 64.3 → 35.0 tok/s,
+TTFT 1.29 → 4.53 s, wall-to-wall 4.98 → 10.09 s.
+
+## Quality: does the quant change how smart it is?
+**Probe** (top-k in O(n log k) + bat-and-ball, thinking off): EXL3 correct, NVFP4 correct.
+**Battery**: 12 auto-graded items (3 math word problems, 3 logic, 2 code, leap-year rule, bat-and-ball, 2 strict-format),
+identical for both lanes, temp 0, thinking off and thinking on (`tools/quality_battery.py`, full items + answers in `results/quality_battery_*.json`):
+
+| accuracy | NVFP4 · off | EXL3 · off | NVFP4 · on | EXL3 · on |
+|---|---|---|---|---|
+| **all 12** | 11/12 (92%) | 11/12 (92%) | 12/12 (100%) | 12/12 (100%) |
+| math | 3/3 | 3/3 | 3/3 | 3/3 |
+| logic | 3/3 | 3/3 | 3/3 | 3/3 |
+| code | 2/2 | 2/2 | 2/2 | 2/2 |
+| knowledge | 1/1 | 1/1 | 1/1 | 1/1 |
+| reasoning | 1/1 | 1/1 | 1/1 | 1/1 |
+| format | 1/2 | 1/2 | 2/2 | 2/2 |
+| avg reasoning trace, on (chars) | | | 341 | 333 |
+
+Disagreements, thinking off:
+- none — identical pass/fail on every item
+Disagreements, thinking on:
+- none — identical pass/fail on every item
+Traces, thinking on (same item, both lanes):
+**the clock-hands angle at 3:15**
+NVFP4 (306 chars, right):
+> At 3:15, the minute hand is at 15 minutes, which is at the 3 position (90 degrees from 12).
+> The hour hand: at 3:00 it's at 90 degrees. In 15 minutes, it moves 15 × 0.5 = 7.5 degrees. So hour hand is at 97.5 degrees.
+> Minute hand at 15 minutes: 15 × 6 = 90 degrees.
+> Angle between: 97.5 - 90 = 7.5 degrees.
+
+EXL3 (370 chars, right):
+> At 3:15, the minute hand is at 15 minutes, which is at the 3 position (90 degrees from 12).
+> The hour hand at 3:15 has moved past 3. At 3:00 it's at 90 degrees. Each minute, the hour hand moves 0.5 degrees. So at 3:15, hour hand is at 90 + 15 × 0.5 = 90 + 7.5 = 97.5 degrees.
+> Minute hand at 15 minutes: 15 × 6 = 90 degrees.
+> Angle between them: 97.5 - 90 = 7.5 degrees.
+
+**reverse the word 'benchmark' (the item both missed with thinking off)**
+NVFP4 (245 chars, right):
+> The word 'benchmark' spelled backwards.
+> b-e-n-c-h-m-a-r-k
+> Reversed: k-r-a-m-h-c-n-e-b
+> kramhcneb
+> Let me verify: benchmark has letters b, e, n, c, h, m, a, r, k (9 letters).
+> Reversed: k, r, a, m, h, c, n, e, b → kramhcneb
+> Yes, that's correct.
+
+EXL3 (219 chars, right):
+> The word "benchmark" spelled backwards.
+> b-e-n-c-h-m-a-r-k
+> Reversed: k-r-a-m-h-c-n-e-b
+> So "kramhcneb"
+> Let me verify: benchmark = b, e, n, c, h, m, a, r, k (9 letters)
+> Reversed: k, r, a, m, h, c, n, e, b = "kramhcneb"
+
+**predict the Python output**
+NVFP4 (286 chars, right):
+> Let me trace through this code.
+> x = [1, 2, 3, 4, 5]
+> y = x[1:-1] — this is elements from index 1 to index -2 (exclusive of -1), so y = [2, 3, 4]
+> y.append(x[0] * x[-1]) — x[0] = 1, x[-1] = 5, so 1 * 5 = 5. y = [2, 3, 4, 5]
+> sum(y) = 2 + 3 + 4 + 5 = 14
+> len(x) = 5
+> 14 - 5 = 9
+> ANSWER: 9
+
+EXL3 (282 chars, right):
+> Let me trace through this Python code.
+> x = [1, 2, 3, 4, 5]
+> y = x[1:-1] — this slices from index 1 to index -1 (exclusive), so y = [2, 3, 4]
+> y.append(x[0] * x[-1]) — x[0] = 1, x[-1] = 5, so 1 * 5 = 5. y = [2, 3, 4, 5]
+> sum(y) = 2 + 3 + 4 + 5 = 14
+> len(x) = 5
+> 14 - 5 = 9
+> ANSWER: 9
+
+Published KLD: EXL3/TR3 4bpw ~0.025 (ties FP8), NVFP4 ~0.060. Twelve items is a probe, not a suite.
+
+## What we got wrong, part two: the prefix cache
+The first version said EXL3 "answers first" (0.52 vs 1.54 s at c1; prefill 3099 vs 1055 tok/s). Every request carried the same prompt; EXL3 replayed its prefix cache, NVFP4 (2,304-token cache blocks) recomputed. Fresh prompts: TTFT c1 NVFP4 1.29 s vs EXL3 2.31 s, c6 4.53 vs 9.82 s; fresh prefill 1,225 vs 684 tok/s; cold prefill at 211,001 tokens 2,763 vs 1,752 tok/s. EXL3 keeps: the cache (identical 1.6K prompt repeated: EXL3 0.52 s vs NVFP4 1.54 s at c1, 1.02 s vs 4.6 s at c6; a 211,001-token context replayed in 0.8 s vs 9.2 s), mixed real-prompt load (NVFP4 31.4 tok/s vs EXL3 43.4 tok/s aggregate, TTFT 1.97 s vs 0.66 s), 4× context, 4.7× KV, 13-min boot.
+
+
+## Real prompts: 40 across 8 categories (thinking off, c1, streaming)
+
+| category | auto score NVFP4 | auto score EXL3 | judge (NVFP4 / EXL3 / tie) | TTFT NVFP4 | TTFT EXL3 | decode NVFP4 | decode EXL3 | tokens (med) |
+|---|---|---|---|---|---|---|---|---|
+| coding | 100% | 80% | 3 / 1 / 1 | 0.32 s | 0.34 s | 48.3 | 41.9 | 110 / 295 |
+| reasoning | 100% | 100% | — | 0.37 s | 0.31 s | 47.8 | 42.3 | 177 / 163 |
+| json | 100% | 100% | — | 0.42 s | 0.53 s | 52.9 | 50.3 | 36 / 36 |
+| html | 100% | 100% | 0 / 1 / 4 | 0.40 s | 0.47 s | 52.6 | 56.1 | 138 / 129 |
+| prose | 75% | 55% | 1 / 2 / 2 | 0.34 s | 0.30 s | 18.8 | 19.5 | 200 / 199 |
+| narrative | 89% | 76% | 3 / 2 / 0 | 0.34 s | 0.29 s | 18.7 | 17.9 | 307 / 335 |
+| summary | 60% | 70% | 1 / 1 / 3 | 1.68 s | 7.29 s | 36.9 | 34.0 | 205 / 187 |
+| format | 60% | 96% | 1 / 1 / 3 | 0.34 s | 0.33 s | 28.7 | 21.1 | 27 / 20 |
+
+Overall auto score (checkable categories): NVFP4 86%, EXL3 85%. Median TTFT across all 40: NVFP4 0.37 s, EXL3 0.33 s. Median decode: NVFP4 41.9 tok/s, EXL3 38.4 tok/s.
+Mixed load, c4 (four different prompt types in flight): aggregate NVFP4 31.4 tok/s vs EXL3 43.4 tok/s; median TTFT 1.97 s vs 0.66 s; auto score 86% vs 84%.
+Thinking on (coding + reasoning): auto score NVFP4 96% vs EXL3 94%; median TTFT 0.36 s vs 0.28 s.
+Blind pairwise judge (qwen3.8-27b), both orders, win only if consistent: NVFP4 9, EXL3 8, tie 13.
+
+Items where the auto score differed:
+- code4 (coding): NVFP4 100%  · EXL3 0% [0/6 tests · SyntaxError: invalid syntax]
+- prose4 (prose): NVFP4 100%  · EXL3 0% [words 218 in 150-200]
+- story2 (narrative): NVFP4 67% [words 231 in 120-200] · EXL3 100% 
+- story3 (narrative): NVFP4 100%  · EXL3 50% [words 368 in 200-300]
+- story5 (narrative): NVFP4 100%  · EXL3 50% [words 265 in 150-250]
+- sum2 (summary): NVFP4 0% [words 112 in 20-80; paragraphs=1] · EXL3 50% [words 98 in 20-80]
+- fmt2 (format): NVFP4 100%  · EXL3 80% [table rows=2+header]
+- fmt4 (format): NVFP4 0% [words 22 in 1-20] · EXL3 100% 
+- fmt5 (format): NVFP4 0% [lines=3] · EXL3 100% 
+
+### Thinking on, all 40 prompts
+
+| category | auto NVFP4 | auto EXL3 | TTFT NVFP4 | TTFT EXL3 | decode NVFP4 | decode EXL3 | tokens (med) |
+|---|---|---|---|---|---|---|---|
+| coding | 100% | 100% | 0.31 s | 0.30 s | 42.3 | 42.0 | 1112 / 871 |
+| reasoning | 100% | 100% | 0.37 s | 0.29 s | 51.4 | 51.3 | 211 / 236 |
+| json | 100% | 100% | 0.38 s | 0.26 s | 49.7 | 49.5 | 142 / 158 |
+| html | 100% | 100% | 0.41 s | 0.16 s | 46.2 | 42.6 | 623 / 744 |
+| prose | 100% | 80% | 0.32 s | 0.28 s | 39.7 | 34.7 | 1261 / 1639 |
+| narrative | 80% | 80% | 0.35 s | 0.31 s | 33.3 | 36.4 | 1936 / 2208 |
+| summary | 90% | 90% | 1.42 s | 0.26 s | 45.1 | 34.3 | 918 / 953 |
+| format | 100% | 100% | 0.34 s | 0.28 s | 49.0 | 39.4 | 189 / 317 |
+
+Overall with thinking on: auto score NVFP4 96% vs EXL3 94%; median TTFT 0.36 s vs 0.28 s; median decode 45.4 vs 41.9 tok/s.
+
+### Agent loop: the whole conversation re-sent every turn
+
+Every turn re-sends the full history (system prompt, every earlier user turn, every earlier assistant reply) plus one new instruction; the assistant's real reply is appended for the next turn. Thinking off, 200-token replies. The long version carries a 30K-token document in the first turn, so every later turn re-sends it too.
+
+| run | turns | final context (tok) | TTFT first turn | TTFT median | TTFT p90 | TTFT last turn | decode (med) | total |
+|---|---|---|---|---|---|---|---|---|
+| NVFP4 short | 20 | 3,206 | 0.36 s | 1.28 s | 2.01 s | 2.1 s | 21.1 tok/s | 158.1 s |
+| EXL3 short | 20 | 3,222 | 0.53 s | 0.96 s | 1.08 s | 1.1 s | 20.1 tok/s | 161.5 s |
+| NVFP4 long | 10 | 29,222 | 17.43 s | 4.04 s | 4.28 s | 4.28 s | 20.6 tok/s | 106.7 s |
+| EXL3 long | 10 | 29,212 | 32.57 s | 1.02 s | 1.34 s | 1.02 s | 19.9 tok/s | 99.3 s |
+
+### Determinism at temperature 0
+
+The same 40 prompts three times per lane, temperature 0, same state.
+
+| lane | outputs byte-identical across runs | auto score per run | items whose score changed | token-count spread, median / max |
+|---|---|---|---|---|
+| NVFP4 | 10/40 (25%) | 86% / 88% / 81% | 8 (prose1, prose4, story1, story2, story3, sum2, sum5, fmt5) | 12 / 465 |
+| EXL3 | 9/40 (22%) | 85% / 79% / 82% | 6 (code1, prose1, prose2, story1, story4, fmt4) | 14 / 719 |
+
+### Tokens per joule
+
+GPU power from nvidia-smi on both nodes of each lane (1 Hz for 60 s) during a c4 counting load; tokens per joule = lane throughput divided by the sum of the two nodes' average GPU power. GPU power only, not wall power.
+
+| lane | throughput under load | node GPU power (W) | lane GPU power (W) | tokens per joule |
+|---|---|---|---|---|
+| NVFP4 | 123.0 tok/s | 26.5 + 24.2 | 50.7 | 2.426 |
+| EXL3 | 138.6 tok/s | 34.9 + 33.2 | 68.1 | 2.035 |
+
+### Prefill vs prompt length
+
+Cold = first request at that length, a new prompt: this is the real prefill compute. Repeat = the identical prompt sent again, which is a prefix-cache hit on both engines and measures the cache, not prefill.
+
+| prompt tokens | NVFP4 cold tok/s (s) | EXL3 cold tok/s (s) | NVFP4 repeat | EXL3 repeat |
+|---|---|---|---|---|
+| 6,899 | 1,482 (4.7 s) | 775 (8.9 s) | 1,479 (4.7 s) | 17,252 (0.4 s) |
+| 13,772 | 1,559 (8.8 s) | 1,614 (8.5 s) | 2,283 (6.0 s) | 35,919 (0.4 s) |
+| 27,518 | 1,876 (14.7 s) | 1,711 (16.1 s) | 4,598 (6.0 s) | 55,387 (0.5 s) |
+| 55,097 | 2,384 (23.1 s) | 1,660 (33.2 s) | 9,076 (6.1 s) | 101,681 (0.5 s) |
+| 110,255 | 2,684 (41.1 s) | 1,780 (61.9 s) | 18,246 (6.0 s) | 176,340 (0.6 s) |
+| 211,001 | 2,763 (76.4 s) | 1,752 (120.4 s) | 22,931 (9.2 s) | 261,333 (0.8 s) |
+
+
+
+## NVFP4 TP4 (4 Sparks, CUDA graphs) vs the TP2 lanes
+
+Same night, same tools, same prompts, same isolation. TP4 = all four Sparks in one tensor-parallel group with CUDA graphs on (the validated 08-31 recipe), RedHat NVFP4 base weights, 1M context. The TP2 lanes are the two-node pairs benched earlier: NVFP4 TP2 (Reddie + Spark4, eager) and EXL3 TP2 (Bluey + Asusi, eager). The TP4 lane uses all four boxes, so per-box it is half a lane; read the per-box column for what the hardware is doing.
+
+| metric | NVFP4 TP4 | NVFP4 TP2 | EXL3 TP2 | TP4 vs NVFP4 TP2 |
+|---|---|---|---|---|
+| c1 single-stream tok/s (sweep) | 101.1 | 64.3 | 61.8 | +57% |
+| c1 single-stream tok/s (detailed, n=5) | 101.9 | 64.0 | 61.5 | +59% |
+| c6 aggregate tok/s | 319.1 | 136.3 | 125.2 | +134% |
+| c6 per-stream tok/s | 54.8 | 35.0 | 35.8 | +57% |
+| peak aggregate tok/s | 319.1 | 138.6 | 149.7 | +130% |
+| TTFT fresh 1.6K prompt, c1 (s) | 0.9 | 1.3 | 2.3 | -29% (lower is better) |
+| TTFT fresh, c6 (s) | 4.2 | 4.5 | 9.8 | -7% (lower is better) |
+| prefill fresh 1.6K tok/s | 1,736.0 | 1,225.0 | 684.0 | +42% |
+| cold prefill at ~211K tok/s | 1,670.0 | 2,763.0 | 1,752.0 | -40% |
+| wall-to-wall c1 / c6 (s) | 3.17 / 5.84 | 4.98 / 10.09 | 5.18 / 8.95 |  |
+| real prompts auto score, thinking off | 83% | 86% | 85% | -3% |
+| real prompts median decode tok/s | 61.0 | 41.9 | 38.4 | +46% |
+| mixed c4 aggregate tok/s / TTFT s | 72.3 / 0.68 | 31.4 / 1.97 | 43.4 / 0.66 |  |
+| thinking on auto score | 96% | 96% | 94% | +0% |
+| agent loop 30K doc: TTFT med s / total s | 1.83 / 57.7 | 4.04 / 106.7 | 1.02 / 99.3 |  |
+| 12-item battery off / on | 11/12 / 12/12 | 11/12 / 12/12 | 11/12 / 12/12 |  |
+| load throughput tok/s (c4 counting, 60 s) | 242.8 | 123.0 | 138.6 | +97% |
+| lane GPU power W (all nodes) | 101.9 | 50.7 | 68.1 | +101% (lower is better) |
+| tokens per joule | 2.4 | 2.4 | 2.0 | -2% |
+| boot launch → healthy (min) | 13.0 | 23.0 | 13.0 | -43% (lower is better) |
+
+### Per category, thinking off (auto score / decode tok/s / TTFT s)
+
+| category | NVFP4 TP4 | NVFP4 TP2 | EXL3 TP2 |
+|---|---|---|---|
+| coding | 80% / 58.4 / 0.30 | 100% / 48.3 / 0.32 | 80% / 41.9 / 0.34 |
+| reasoning | 100% / 63.6 / 0.31 | 100% / 47.8 / 0.37 | 100% / 42.3 / 0.31 |
+| json | 100% / 87.2 / 0.30 | 100% / 52.9 / 0.42 | 100% / 50.3 / 0.53 |
+| html | 100% / 94.3 / 0.30 | 100% / 52.6 / 0.40 | 100% / 56.1 / 0.47 |
+| prose | 40% / 26.0 / 0.26 | 75% / 18.8 / 0.34 | 55% / 19.5 / 0.30 |
+| narrative | 76% / 23.3 / 0.32 | 89% / 18.7 / 0.34 | 76% / 17.9 / 0.29 |
+| summary | 70% / 61.5 / 1.13 | 60% / 36.9 / 1.68 | 70% / 34.0 / 7.29 |
+| format | 96% / 34.2 / 0.23 | 60% / 28.7 / 0.34 | 96% / 21.1 / 0.33 |
+
+### Determinism (3 runs at temp 0)
+
+| lane | identical outputs | auto score per run |
+|---|---|---|
+| NVFP4 TP4 | 10/40 | 83% / 87% / 83% |
+| NVFP4 TP2 | 10/40 | 86% / 88% / 81% |
+| EXL3 TP2 | 9/40 | 85% / 79% / 82% |
+
+### Cold prefill vs length, tok/s
+
+| prompt tokens | NVFP4 TP4 | NVFP4 TP2 | EXL3 TP2 |
+|---|---|---|---|
+| 6,899 | 1,398 | 1482 | 775 |
+| 13,772 | 2,400 | 1559 | 1614 |
+| 27,518 | 1,639 | 1876 | 1711 |
+| 55,097 | 882 | 2384 | 1660 |
+| 110,255 | 1,301 | 2684 | 1780 |
+| 211,001 | 1,670 | 2763 | 1752 |
+
+
+
+## TP4 head-to-head, matched config: DeepSeek V4 Flash Vision vs GLM-5.3-Flash NVFP4
+
+Each model alone on all four Sparks (TP4), max-num-seqs 64, CUDA graphs on, k=5 DSpark with Patch 4 for DeepSeek, DFlash2 k=7 for GLM, 1M context, same battery, same isolation, run back to back on 2026-09-02. Lower is better only where the row says so.
+
+### Headline: prose and code decode from real prompts (tok/s, median), then fresh-prompt first token
+
+| | DeepSeek | GLM |
+|---|---|---|
+| prose decode, C1 | 42.0 | 31.2 |
+| code decode, C1 | 98.3 | 75.1 |
+| prose decode under mixed C16 | 20.7 | 13.3 |
+| code decode under mixed C16 | 27.5 | 23.5 |
+| mixed real-prompt aggregate C16 | 123.9 | 100.0 |
+| first token, fresh 1.6K prompt, C1 / C16 | 0.94 / 9.99 s | 0.91 / 11.06 s |
+| cold prefill, fresh 211K prompt | 4,865 tok/s | 4,840 tok/s |
+
+Every number above and in the chart is from real prompts. The counting-prompt ladder is at the bottom, labeled as the draft-acceptance ceiling.
+
+### Time to first token, fresh 1.6K prompts (s, median)
+
+| C | DeepSeek | GLM |
+|---|---|---|
+| 1 | 0.94 | 0.91 |
+| 8 | 7.30 | 5.38 |
+| 16 | 9.99 | 11.06 |
+
+### Real prompts, 40 across 8 categories, C1 (auto score / decode tok/s / TTFT s)
+
+| category | DeepSeek | GLM |
+|---|---|---|
+| coding | 100% / 98.3 / 0.19 | 80% / 75.1 / 0.30 |
+| reasoning | 80% / 88.3 / 0.24 | 100% / 72.5 / 0.32 |
+| json | 100% / 85.4 / 0.41 | 100% / 79.9 / 0.31 |
+| html | 89% / 103.4 / 0.19 | 100% / 94.4 / 0.29 |
+| prose | 60% / 42.0 / 0.17 | 35% / 31.2 / 0.30 |
+| narrative | 90% / 44.8 / 0.29 | 76% / 32.4 / 0.27 |
+| summary | 80% / 61.3 / 0.98 | 60% / 60.4 / 1.11 |
+| format | 100% / 50.3 / 0.18 | 96% / 35.8 / 0.24 |
+
+| real prompts overall | DeepSeek | GLM |
+|---|---|---|
+| auto score C1 | 87% | 81% |
+| median decode C1 | 74.2 | 63.8 |
+| mixed C4 aggregate / TTFT | 94.2 / 0.34 s | 73.5 / 0.94 s |
+| mixed C16 aggregate / TTFT | 123.9 / 0.90 s | 100.0 / 2.18 s |
+| auto score C16 | 89% | 90% |
+
+### Cold prefill vs prompt length (tok/s)
+
+| prompt tokens | DeepSeek | GLM |
+|---|---|---|
+| 6,890 | 2,412 | 1,974 |
+| 13,763 | 4,566 | 2,470 |
+| 27,509 | 4,638 | 3,023 |
+| 55,088 | 4,620 | 3,586 |
+| 110,246 | 4,290 | 3,796 |
+| 181,760 | 4,865 | 4,840 |
+
+### Power at C16 (GPU, four nodes, 60 s)
+
+| | DeepSeek | GLM |
+|---|---|---|
+| throughput under load | 544.9 tok/s | 465.9 tok/s |
+| four-node GPU power | 177.9 W | 156.0 W |
+| tokens per joule | 3.06 | 2.99 |
+
+### Peak ceiling: the counting prompt (max draft acceptance, NOT a typical number)
+
+One prompt, count from 1 to 300, ~300 tokens of the easiest sequence a speculative drafter can guess. It is what most Spark posts quote as decode speed and it reads 2 to 3× higher than prose. Kept here only as the acceptance ceiling of each drafter.
+
+| C | DeepSeek | GLM | GLM vs DeepSeek |
+|---|---|---|---|
+| 1 | 95.2 | 100.3 | +5% |
+| 2 | 171.0 | 121.3 | -29% |
+| 3 | 214.9 | 193.1 | -10% |
+| 4 | 290.2 | 246.2 | -15% |
+| 5 | 266.3 | 289.9 | +9% |
+| 6 | 367.9 | 307.8 | -16% |
+| 8 | 465.8 | 364.6 | -22% |
+| 16 | 586.3 | 391.7 | -33% |
+| 32 | 854.5 | 594.9 | -30% |
+| 48 | 1,073.2 | 816.8 | -24% |
+
+| C | DeepSeek per stream | GLM per stream |
+|---|---|---|
+| 1 | 95.2 | 100.3 |
+| 2 | 85.5 | 60.6 |
+| 3 | 73.7 | 64.8 |
+| 4 | 74.0 | 63.6 |
+| 5 | 54.2 | 58.6 |
+| 6 | 62.5 | 52.8 |
+| 8 | 59.2 | 46.3 |
+| 16 | 37.3 | 25.0 |
+| 32 | 27.9 | 19.1 |
+| 48 | 23.7 | 17.3 |
+
+### Verdict (computed from the rows above)
+
+- Real prompts, single stream: DeepSeek 74.2 vs GLM 63.8 tok/s median over 40 prompts; prose 42.0 vs 31.2; narrative 44.8 vs 32.4; code 98.3 vs 75.1.
+- Real prompts under load: C4 aggregate 94.2 vs 73.5 tok/s (first token 0.34 vs 0.94 s); C16 123.9 vs 100.0 (first token 0.90 vs 2.18 s).
+- Quality on the 40 prompts (±4 pts run to run): DeepSeek 87% vs GLM 81% at C1; 89% vs 90% at C16.
+- Cold prefill, fresh 182K prompt: DeepSeek 4,865 vs GLM 4,840 tok/s; DeepSeek reaches its plateau by 14K, GLM climbs to it.
+- Tokens per joule at C16: DeepSeek 3.06 vs GLM 2.99.
+- Ceiling only (counting prompt): C1 97.4 vs 99.9 tok/s, C48 1,073.2 vs 816.8. Not a decode number.
+
+
+
+## Boot and load time
+Launch command → first `/health` 200, this run: EXL3 13 min (local weights both nodes, warm trellis JIT cache); NVFP4 23 min (worker loads over NFS from head (Reddie page cache warm), TileLang cache partly warm). NVFP4's worker reads its
+weights over NFS from the head on this cluster (no local copy of the base on Spark4). Both JIT-compile on first boot.
+
+## What broke, and the fixes
+- EXL3 kit: `count_shards()` uses `find -type f` (misses HF-cache symlinks) → "0 / 120 shards"; fix `find -L`.
+- EXL3 kit: worker needs the full ~164 GiB; root-owned `~/.cache/vllm-glm53-flash` kills the launch silently (chown);
+  binds `--host 127.0.0.1` (set `0.0.0.0`).
+- NVFP4: run the published recipe verbatim (1M context starves the KV pool at TP2: three NVRM OOM reboots + a stall).
+  `vm.swappiness=0` resets on reboot. Poll `/health`, not `/v1/models`.
+- Both: verify SM clocks under load after any reboot; drop caches on every node before every launch.
+
+## Reproduce
+See `docs/article.html` §Reproduce, `tools/run_full_test.sh`, and the two repos below.
+
+## Credits
+Reederey87 · MiaAI-Lab · brandonmusic (EXL3 quant, ShapleyMCG) · turboderp (exllamav3) · IncoAI (DFlash2) ·
+RedHatAI (NVFP4 weights) · zai-org (GLM-5.3-Flash) · malaiwah, drowzeys.
+Repos: github.com/tonyd2wild/GLM-5.3-Flash-NVFP4-DFlash2-2x-DGX-Spark · github.com/tonyd2wild/GLM-5.3-Flash-EXL3-on-2x-NVIDIA-DGX-Spark
+
+## Caveats
+One quality probe is not a quality study. Raise EXL3's `--max-num-seqs` and re-sweep c5–c8. Neither lane is the
+abliterated variant. Two specific quants on one specific cluster.
