@@ -28,7 +28,9 @@ The cell's `--mem-fraction-static 0.80` reserves 80% of the 128 GB unified memor
 
 1. **A swapfile on each node** so the load-time transient spills instead of dying: `sudo fallocate -l 48G /swapfile-sglang && sudo chmod 600 /swapfile-sglang && sudo mkswap /swapfile-sglang && sudo swapon /swapfile-sglang`. Peak swap use seen during load: about 36 GB per node; it drains to near zero once serving.
 2. Keep `--mem-fraction-static 0.80` (the launcher default). That leaves roughly 9 GB of KV per node at TP2.
-3. A page-cache flusher while loading is optional insurance: `for i in $(seq 1 300); do sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null; sleep 5; done &`.
+3. The launcher tames the spike at the source: `--model-loader-extra-config '{"enable_multithread_load":false}'` (the image's default 8-thread loader keeps about ten 3.6 GB shards of host buffers in flight while the full parameter store is already resident), `--weight-loader-drop-cache-after-load` (per-shard page-cache release) and `--startup-weight-load-mode serial`. With those, swap is a safety net rather than a requirement.
+
+Where the memory goes at TP2 (from the shard headers): about 84 GB of weights per node (73.6 GB routed experts, 5.4 GB DSpark draft, 3 GB attention, 1 GB embeddings and head, 0.9 GB vision encoder). KV cost is about 14.6 KB per token at `--swa-full-tokens-ratio 0.2` (9.3 KB at 0.1), replicated on both ranks, so 0.80 leaves roughly 0.5M tokens of KV per node. 32 concurrent requests at the full 327,680 context do not fit; SGLang caps running requests to the pool.
 
 The launcher also mounts `/var/tmp/sglang-cache` to `/root/.cache` so the CuTeDSL and FlashInfer JIT and autotune results survive a relaunch (a cold start pays 10 to 15 minutes of compilation).
 

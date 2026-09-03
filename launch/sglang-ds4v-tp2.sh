@@ -42,9 +42,16 @@ sync; echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null || true
 # Served id matches the HF repo so clients can use it as the model name.
 EXTRA=(--default-chat-template-kwargs '{"thinking":false}' --reasoning-parser deepseek-v4
        --served-model-name "${SERVED_NAME:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}")
+# Load-time host RAM on GB10: the image's default loader runs 8 threads and keeps ~10 shards (3.6 GB each) of
+# host buffers in flight while the full 78 GiB parameter store is already resident, which is the ~38 GB spike
+# that gets the scheduler OOM-killed. Single-thread mmap loading (page-cache backed), dropping each shard's
+# cache after use, and serial startup keep the spike small. Set LOADER_THREADS=N to trade RAM for speed.
 if [ -n "${LOADER_THREADS:-}" ]; then
   EXTRA+=(--model-loader-extra-config "{\"enable_multithread_load\":true,\"num_threads\":$LOADER_THREADS}")
+else
+  EXTRA+=(--model-loader-extra-config '{"enable_multithread_load":false}')
 fi
+EXTRA+=(--weight-loader-drop-cache-after-load --startup-weight-load-mode serial)
 if [ -n "${SGLANG_EXTRA:-}" ]; then
   # shellcheck disable=SC2206
   EXTRA+=($SGLANG_EXTRA)
