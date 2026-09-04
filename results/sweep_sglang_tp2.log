@@ -1,1 +1,3 @@
 [sglang_tp2] warm-up ...
+  c1: agg   78.6 tok/s | per-stream  78.7 | w2w med  4.07s p90  4.86s | TTFT  1.05s | prefill 1543 tok/s
+  c2: agg  132.1 tok/s | per-stream  66.1 | w2w med  4.84s p90  5.27s | TTFT  0.82s
