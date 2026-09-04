@@ -1,0 +1,5 @@
+== sglang_tp2 C1  20:09:32
+    narrative  auto=0.9  ttft=0.36s  decode=27.6  tokens=288
+    summary    auto=0.95  ttft=1.36s  decode=37.7  tokens=109
+    format     auto=1.0  ttft=0.3s  decode=28.5  tokens=20
+== sglang_tp2 C4  20:12:49
