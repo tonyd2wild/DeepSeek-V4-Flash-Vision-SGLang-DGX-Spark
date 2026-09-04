@@ -1,3 +1,8 @@
 [sglang_tp2] warm-up ...
   c1: agg   78.6 tok/s | per-stream  78.7 | w2w med  4.07s p90  4.86s | TTFT  1.05s | prefill 1543 tok/s
   c2: agg  132.1 tok/s | per-stream  66.1 | w2w med  4.84s p90  5.27s | TTFT  0.82s
+  c3: agg  177.9 tok/s | per-stream  60.3 | w2w med  5.31s p90  6.28s | TTFT  0.86s
+  c4: agg  224.6 tok/s | per-stream  56.6 | w2w med  5.66s p90  5.78s | TTFT  0.90s
+  c5: agg  264.6 tok/s | per-stream  53.8 | w2w med  5.95s p90  6.26s | TTFT  0.91s
+  c6: agg  291.9 tok/s | per-stream  49.6 | w2w med  6.45s p90  7.58s | TTFT  1.23s
+JSON -> results/sweep_sglang_tp2.json

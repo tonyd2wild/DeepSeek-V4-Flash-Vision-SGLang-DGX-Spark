@@ -54,6 +54,17 @@ Read: on these Sparks the SGLang preview decodes at about 60% of our vLLM TP4 la
 
 `tools/bench_sweep.py` runs "list the numbers 1 to 300" at C1 to C6. That prompt maximizes draft acceptance and is reported only as a peak, at the bottom, never as decode speed. See `results/sweep_sglang_tp2.json` and `results/sweep_ds4tp4.json`.
 
+| c | SGLang TP2 aggregate tok/s | per stream | TTFT | vLLM TP4 aggregate | per stream | TTFT |
+|---|---|---|---|---|---|---|
+| 1 | 78.6 | 78.7 | 1.05 s | 95.2 | 95.2 | 0.33 s |
+| 2 | 132.1 | 66.1 | 0.82 s | 171.0 | 85.5 | 0.32 s |
+| 3 | 177.9 | 60.3 | 0.86 s | 214.9 | 73.7 | 0.37 s |
+| 4 | 224.6 | 56.6 | 0.90 s | 290.2 | 74.0 | 0.69 s |
+| 5 | 264.6 | 53.8 | 0.91 s | 266.3 | 54.2 | 0.58 s |
+| 6 | 291.9 | 49.6 | 1.23 s | 367.9 | 62.5 | 0.66 s |
+
+Peak max acceptance: SGLang TP2 reaches 292 tok/s aggregate at c6 on this prompt (vLLM TP4 368). Cold prefill on a ~1.5K-token prompt at c1: 1,543 tok/s (SGLang TP2) versus 4,868 tok/s (vLLM TP4).
+
 ## Lane 2: TP4 (4 Sparks)
 
 Planned. The cookbook ships only the 2-node cell; the TP4 lane will reuse the same image and flags with `--tp 4 --nnodes 4` if the preview build allows it, and results land in the same table.
