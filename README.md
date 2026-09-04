@@ -40,11 +40,19 @@ Images go in as OpenAI `image_url` content on `/v1/chat/completions`; text reque
 
 Real prompts only, no counting prompts in the headline (40 prompts, 8 categories, `tools/bench_categories.py`). Prefill measured cold. C1 = one stream, C4 = four, C16 = sixteen concurrent.
 
-| lane | prose tok/s | code tok/s | C4 aggregate | C16 aggregate | TTFT C1 | notes |
-|---|---|---|---|---|---|---|
-| SGLang TP2 (this repo) | pending | pending | pending | pending | pending | 327K ctx |
-| vLLM DSpark TP2 (ours) | pending | pending | pending | pending | pending | 1M ctx |
-| vLLM DSpark TP4 (ours, 2026-09-02) | 42 | 98 | 94.2 | 124 | 0.21 s | 1M ctx, 8.33M-token KV; fresh 1.6K-token prompt TTFT 0.94 s |
+| lane | prose tok/s | code tok/s | C1 median (all 40) | C4 aggregate | C16 aggregate | TTFT C1 / C16 | auto score C1 / C16 | notes |
+|---|---|---|---|---|---|---|---|---|
+| SGLang TP2, this repo (2026-09-03) | 31.2 | 59.6 | 45.3 | 58.4 | 74.7 | 0.36 s / 1.42 s | 0.906 / 0.864 | 327K ctx, 507K-token KV pool, DSpark accept ~2.2 tok/step |
+| vLLM DSpark TP4, ours (2026-09-02) | 42.0 | 98.3 | 74.2 | 94.2 | 123.9 | 0.21 s / 0.90 s | 0.873 / 0.894 | 1M ctx, 8.33M-token KV; fresh 1.6K-token prompt TTFT 0.94 s |
+| vLLM DSpark TP2, ours | not yet run through this harness | | | | | | | 1M ctx, ~2.79M-token KV; counting-ladder c1 53 / c6 160 tok/s (2026-08-31) |
+
+Per-category C1 decode tok/s (auto score): SGLang TP2 coding 59.6 (1.00), reasoning 51.3 (0.80), json 71.7 (1.00), html 73.6 (0.80), prose 31.2 (0.80), narrative 27.6 (0.90), summary 37.7 (0.95), format 28.5 (1.00). vLLM TP4: coding 98.3 (1.00), reasoning 88.3 (0.80), json 85.4 (1.00), html 103.4 (0.89), prose 42.0 (0.60), narrative 44.8 (0.90), summary 61.3 (0.80), format 50.3 (1.00).
+
+Read: on these Sparks the SGLang preview decodes at about 60% of our vLLM TP4 lane single-stream and scales less under concurrency (16 streams reached 75 tok/s aggregate, 13 tok/s per stream). Quality is equal within noise on the same prompts at temperature 0. The DSpark accept length observed during the runs was 1.7 to 2.6 tokens per step versus the ~3.2 the cookbook quotes for Vision. Raw files: `results/categories_sglang_tp2_off_c{1,4,16}.json`, `results/summary.md`.
+
+### Ceiling ladder (counting prompt, not a headline number)
+
+`tools/bench_sweep.py` runs "list the numbers 1 to 300" at C1 to C6. That prompt maximizes draft acceptance and is reported only as a peak, at the bottom, never as decode speed. See `results/sweep_sglang_tp2.json` and `results/sweep_ds4tp4.json`.
 
 ## Lane 2: TP4 (4 Sparks)
 

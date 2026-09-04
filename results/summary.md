@@ -1,6 +1,6 @@
 | lane | prose tok/s | code tok/s | C1 decode med | C1 TTFT med | C1 score | C4 aggregate | C16 aggregate | C16 TTFT | C16 score |
 |---|---|---|---|---|---|---|---|---|---|
-| sglang_tp2 | 31.2 | 59.6 | 45.3 | 0.36 s | 0.906 | n/a | n/a | n/a s | n/a |
+| sglang_tp2 | 31.2 | 59.6 | 45.3 | 0.36 s | 0.906 | 58.4 | 74.7 | 1.42 s | 0.864 |
 | ds4tp4 | 42.0 | 98.3 | 74.2 | 0.21 s | 0.873 | 94.2 | 123.9 | 0.90 s | 0.894 |
 
 Per-category C1 decode tok/s (median) and auto score:

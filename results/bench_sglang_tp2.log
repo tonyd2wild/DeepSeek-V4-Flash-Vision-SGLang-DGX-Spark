@@ -3,3 +3,13 @@
     summary    auto=0.95  ttft=1.36s  decode=37.7  tokens=109
     format     auto=1.0  ttft=0.3s  decode=28.5  tokens=20
 == sglang_tp2 C4  20:12:49
+    narrative  auto=0.8  ttft=0.56s  decode=20.2  tokens=272
+    summary    auto=0.75  ttft=0.56s  decode=21.3  tokens=117
+    format     auto=1.0  ttft=0.56s  decode=16.6  tokens=17
+== sglang_tp2 C16  20:14:45
+    narrative  auto=0.9  ttft=1.42s  decode=11.6  tokens=306
+    summary    auto=0.75  ttft=1.42s  decode=10.1  tokens=125
+    format     auto=1.0  ttft=1.42s  decode=8.3  tokens=15
+done: results/categories_sglang_tp2_off_c1.json
+results/categories_sglang_tp2_off_c16.json
+results/categories_sglang_tp2_off_c4.json
