@@ -10,7 +10,7 @@ Two lanes, one repo: **TP2 (2 Sparks)** now, **TP4 (4 Sparks)** to follow. Same 
 
 ## Lane 1: TP2 (2 Sparks)
 
-Status: **live 2026-09-03** (Bluey head + Asusi worker). Benchmarks below are filled from `results/`.
+Status: **ran 2026-09-03** (Bluey head + Reddie worker, both with a local copy of the checkpoint). Benchmarks below are from that deployment; the pair was handed back to GLM afterwards, relaunch with the two commands below.
 
 ```
 # worker first (rank 1), then head (rank 0)
