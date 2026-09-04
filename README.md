@@ -1,5 +1,7 @@
 # DeepSeek-V4-Flash-Vision-Exp on NVIDIA DGX Spark with SGLang
 
+> **Status: staging checkpoint (2026-09-03).** First working TP2 deployment and first real-prompt numbers. Untuned: the DSpark accept length and prefill path have not been worked on yet, the TP4 lane is not built, and the like-for-like vLLM TP2 run is still owed. Numbers here are a baseline, not a verdict.
+
 Two lanes, one repo: **TP2 (2 Sparks)** now, **TP4 (4 Sparks)** to follow. Same checkpoint, same engine, same benchmark harness, so the numbers are comparable lane to lane and against our vLLM DSpark recipe.
 
 - Model: [`deepseek-ai/DeepSeek-V4-Flash-Vision-Exp`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-Vision-Exp) (305B, 0731 Flash base + vision encoder, bundled DSpark draft head, native FP4-mixed weights)
